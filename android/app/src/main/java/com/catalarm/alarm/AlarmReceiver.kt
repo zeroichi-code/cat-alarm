@@ -12,10 +12,9 @@ class AlarmReceiver : BroadcastReceiver() {
         val alarmId = intent.getStringExtra("alarmId") ?: return
         val soundUri = intent.getStringExtra("soundUri")
 
-        AlarmSoundPlayer.play(context, soundUri)
-
         val overlayIntent = Intent(context, OverlayService::class.java).apply {
             putExtra("alarmId", alarmId)
+            putExtra("soundUri", soundUri)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(overlayIntent)

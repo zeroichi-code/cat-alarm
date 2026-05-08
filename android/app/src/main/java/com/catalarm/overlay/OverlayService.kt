@@ -6,16 +6,16 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.graphics.ImageDecoder
 import android.graphics.PixelFormat
+import android.graphics.drawable.AnimatedImageDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import com.bumptech.glide.Glide
-import com.bumptech.glide.load.resource.gif.GifDrawable
-import com.bumptech.glide.request.target.CustomTarget
-import com.bumptech.glide.request.transition.Transition
-import android.graphics.drawable.Drawable
 import com.catalarm.R
 import com.catalarm.sound.AlarmSoundPlayer
 
@@ -23,6 +23,7 @@ class OverlayService : Service() {
 
     private lateinit var windowManager: WindowManager
     private lateinit var catView: CatOverlayView
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -32,7 +33,19 @@ class OverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // STOPアクションで即停止
+        if (intent?.action == "STOP") {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         startForegroundWithNotification()
+
+        // startForeground()の後にバックグラウンドで音を再生（メインスレッドをブロックしない）
+        val soundUri = intent?.getStringExtra("soundUri")
+        Thread {
+            AlarmSoundPlayer.play(this, soundUri)
+        }.start()
 
         catView = CatOverlayView(this).also { view ->
             val params = WindowManager.LayoutParams(
@@ -51,14 +64,30 @@ class OverlayService : Service() {
             )
             windowManager.addView(view, params)
 
-            // 1ファイルで「歩いて→座る」まで完結するアニメ
+            // バックグラウンドで WebP をデコードして UI スレッドでセット
             val assetId = resources.getIdentifier("cat_enter", "raw", packageName)
             if (assetId != 0) {
-                loadAnimatedAsset(view, assetId)
+                Thread {
+                    try {
+                        val source = ImageDecoder.createSource(resources, assetId)
+                        val drawable = ImageDecoder.decodeDrawable(source)
+                        mainHandler.post {
+                            view.catImageView.setImageDrawable(drawable)
+                            if (drawable is AnimatedImageDrawable) {
+                                drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+                                drawable.start()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        mainHandler.post {
+                            view.catImageView.setBackgroundColor(0xFFFF6600.toInt())
+                        }
+                    }
+                }.start()
             } else {
                 view.catImageView.setBackgroundColor(0xFFFF6600.toInt())
             }
-            // 素材読み込みと平行して移動アニメ開始（タイミングを合わせるため同時スタート）
+
             view.startEntranceAnimation()
         }
 
@@ -71,19 +100,6 @@ class OverlayService : Service() {
             runCatching { windowManager.removeView(catView) }
         }
         AlarmSoundPlayer.stop()
-    }
-
-    private fun loadAnimatedAsset(view: CatOverlayView, rawId: Int, onReady: () -> Unit = {}) {
-        Glide.with(this)
-            .load(rawId)
-            .into(object : CustomTarget<Drawable>() {
-                override fun onResourceReady(resource: Drawable, t: Transition<in Drawable>?) {
-                    view.catImageView.setImageDrawable(resource)
-                    if (resource is GifDrawable) resource.start()
-                    onReady()
-                }
-                override fun onLoadCleared(placeholder: Drawable?) {}
-            })
     }
 
     private fun startForegroundWithNotification() {
@@ -104,6 +120,10 @@ class OverlayService : Service() {
             .setOngoing(true)
             .build()
 
-        startForeground(1, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(1, notification)
+        }
     }
 }

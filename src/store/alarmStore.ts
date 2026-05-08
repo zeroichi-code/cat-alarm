@@ -60,7 +60,30 @@ export const useAlarmStore = create<AlarmStore>((set, get) => ({
   toggleAlarm: async (id) => {
     const alarm = get().alarms.find(a => a.id === id);
     if (!alarm) return;
-    const updated = {...alarm, enabled: !alarm.enabled};
+
+    let newTriggerAtMillis = alarm.triggerAtMillis;
+
+    if (!alarm.enabled) {
+      // ONにする場合、過去の時刻なら更新する
+      const now = Date.now();
+      if (alarm.triggerAtMillis <= now) {
+        if (alarm.isTimer && alarm.timerSeconds) {
+          // タイマー: 今から同じ秒数後
+          newTriggerAtMillis = now + alarm.timerSeconds * 1000;
+        } else {
+          // 通常アラーム: 同じ時・分で次回（今日または明日）
+          const original = new Date(alarm.triggerAtMillis);
+          const next = new Date();
+          next.setHours(original.getHours(), original.getMinutes(), 0, 0);
+          if (next.getTime() <= now) {
+            next.setDate(next.getDate() + 1);
+          }
+          newTriggerAtMillis = next.getTime();
+        }
+      }
+    }
+
+    const updated = {...alarm, enabled: !alarm.enabled, triggerAtMillis: newTriggerAtMillis};
     const alarms = get().alarms.map(a => a.id === id ? updated : a);
     set({alarms});
     saveAlarms(alarms);
